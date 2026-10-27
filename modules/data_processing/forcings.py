@@ -361,6 +361,7 @@ def interpolate_nan_values(
 
     Each variable's missing steps are logged, and each gap where precipitation is set to zero.
     """
+    gaps = []
     for name, var in dataset.data_vars.items():
         # if the variable is non-numeric, skip
         if not np.issubdtype(var.dtype, np.number):
@@ -385,17 +386,27 @@ def interpolate_nan_values(
         )
         if name in PRECIPITATION_VARIABLES:
             long = long_gaps(var, dim, precip_max_gap)
-            zeroed = long.any(others).values
-            edges = np.flatnonzero(np.diff(zeroed, prepend=False, append=False))
-            for start, stop in zip(edges[::2], edges[1::2]):
-                logger.warning(
-                    "%s is set to zero from %s to %s, %d %s steps",
-                    name,
-                    times[start],
-                    times[stop - 1],
-                    stop - start,
-                    dim,
-                )
+
+            for catchment_id in long["catchment"].values:
+                zeroed = long.sel(catchment=catchment_id).values
+                edges = np.flatnonzero(np.diff(zeroed, prepend=False, append=False))
+                for start, stop in zip(edges[::2], edges[1::2]):
+                    logger.warning(
+                        "%s for %s is set to zero from %s to %s, %d %s steps",
+                        name,
+                        catchment_id,
+                        times[start],
+                        times[stop - 1],
+                        stop - start,
+                        dim,
+                    )
+                    gaps.append({
+                        "catchment_id": catchment_id,
+                        "variable": name,
+                        "start": times[start],
+                        "end": times[stop - 1],
+                        "time_steps": stop - start
+                    })
             dataset[name] = var.interpolate_na(dim=dim, method=method).where(~long, 0.0)
             continue
         dataset[name] = var.interpolate_na(
@@ -403,6 +414,8 @@ def interpolate_nan_values(
             method=method,
             fill_value=fill_value if method in ["nearest", "linear"] else None,
         )
+    df = pd.DataFrame(gaps, columns=["catchment_id", "variable", "start", "end", "time_steps"])
+    df.to_csv("long_gaps.csv", index=False)
 
 
 @no_cluster
